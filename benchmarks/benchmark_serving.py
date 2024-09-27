@@ -282,9 +282,10 @@ def sample_random_requests(
     offsets = np.random.randint(0, tokenizer.vocab_size, size=num_prompts)
     input_requests = []
     for i in range(num_prompts):
-        prompt = tokenizer.decode(prefix_token_ids +
-                                  [(offsets[i] + i + j) % tokenizer.vocab_size
-                                   for j in range(input_lens[i])])
+        # prompt = tokenizer.decode(prefix_token_ids +
+        #                           [(offsets[i] + i + j) % tokenizer.vocab_size
+        #                            for j in range(input_lens[i])])
+        prompt = np.random.randint(0, tokenizer.vocab_size, size=input_lens[i]).tolist()
 
         input_requests.append((prompt, int(prefix_len + input_lens[i]),
                                int(output_lens[i]), None))
@@ -331,9 +332,7 @@ def calculate_metrics(
             # serving backends instead of looking at len(outputs[i].itl) since
             # multiple output tokens may be bundled together
             # Note : this may inflate the output token count slightly
-            output_len = len(
-                tokenizer(outputs[i].generated_text,
-                          add_special_tokens=False).input_ids)
+            output_len = input_requests[i][2]
             actual_output_lens.append(output_len)
             total_input += input_requests[i][1]
             if output_len > 1:
