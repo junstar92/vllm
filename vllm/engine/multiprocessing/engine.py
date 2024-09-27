@@ -19,12 +19,12 @@ from vllm.engine.multiprocessing import (ENGINE_DEAD_ERROR, IPC_DATA_EXT,
                                          VLLM_RPC_SUCCESS_STR, RPCAbortRequest,
                                          RPCError, RPCProcessRequest,
                                          RPCStartupRequest, RPCStartupResponse,
-                                         RPCUProfileRequest)
+                                         RPCUProfileRequest, RPCIterDataRequest)
 # yapf: enable
 from vllm.envs import VLLM_RPC_TIMEOUT
 from vllm.executor.gpu_executor import GPUExecutor
 from vllm.logger import init_logger
-from vllm.outputs import RequestOutput
+from vllm.outputs import RequestOutput, IterDataResponse
 from vllm.usage.usage_lib import UsageContext
 
 CONFIG_TYPE = Union[ModelConfig, DecodingConfig, ParallelConfig,
@@ -94,6 +94,10 @@ class MQLLMEngine:
         # Send output stream back to client.
         self.output_socket = self.ctx.socket(zmq.constants.PUSH)
         self.output_socket.bind(f"{ipc_path}{IPC_OUTPUT_EXT}")
+    
+        # Receive streams of IterDataResponse from the MQLLMEngine.
+        self.iter_output_socket = self.ctx.socket(zmq.constants.PUSH)
+        self.iter_output_socket.bind(f"{ipc_path}_iter_socket")
 
         # Send heartbeats back to client.
         self.heartbeat_socket = self.ctx.socket(zmq.constants.PUSH)
@@ -256,6 +260,11 @@ class MQLLMEngine:
                         self.start_profile()
                     else:
                         self.stop_profile()
+                elif isinstance(request, RPCIterDataRequest):
+                    if request == RPCIterDataRequest.GET:
+                        self._handle_iteration_data_request(request)
+                    else:
+                        self.engine.clear_iteration_data()
                 else:
                     raise ValueError("Unknown RPCRequest Type: "
                                      f"{type(request)}")
@@ -304,6 +313,16 @@ class MQLLMEngine:
         self.engine.abort_request(request.request_id)
         if self.log_requests:
             logger.info("Aborted request %s.", request.request_id)
+    
+    def _handle_iteration_data_request(self, request: RPCIterDataRequest.GET):
+        num_iteration, batch_sizes = self.engine.get_iteration_data()
+
+        outputs = IterDataResponse(
+            num_iteration,
+            batch_sizes
+        )
+        output_bytes = pickle.dumps(outputs)
+        self.iter_output_socket.send_multipart((output_bytes, ), copy=False)
 
     def _heartbeat_loop(self):
         while not self._heartbeat_stop_event.wait(

@@ -224,6 +224,8 @@ async def async_request_deepspeed_mii(
 async def async_request_openai_completions(
     request_func_input: RequestFuncInput,
     pbar: Optional[tqdm] = None,
+    *,
+    ignore_eos: bool = False,
 ) -> RequestFuncOutput:
     api_url = request_func_input.api_url
     assert api_url.endswith(
@@ -240,6 +242,7 @@ async def async_request_openai_completions(
             "max_tokens": request_func_input.output_len,
             "logprobs": request_func_input.logprobs,
             "stream": True,
+            "ignore_eos": ignore_eos,
         }
         headers = {
             "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"

@@ -53,6 +53,7 @@ try:
 except ImportError:
     from argparse import ArgumentParser as FlexibleArgumentParser
 
+import requests
 
 @dataclass
 class BenchmarkMetrics:
@@ -382,7 +383,6 @@ def calculate_metrics(
 
     return metrics, actual_output_lens
 
-
 async def benchmark(
     backend: str,
     api_url: str,
@@ -430,6 +430,8 @@ async def benchmark(
     else:
         print("Initial test run completed. Starting main benchmark run...")
 
+    requests.get(base_url + "/clear_iteration_data")
+
     if profile:
         print("Starting profiler...")
         profile_input = RequestFuncInput(
@@ -469,7 +471,7 @@ async def benchmark(
         tasks.append(
             asyncio.create_task(
                 request_func(request_func_input=request_func_input,
-                             pbar=pbar)))
+                             pbar=pbar, ignore_eos=True)))
     outputs: List[RequestFuncOutput] = await asyncio.gather(*tasks)
 
     if profile:
@@ -484,7 +486,7 @@ async def benchmark(
             best_of=best_of,
             use_beam_search=use_beam_search,
         )
-        profile_output = await request_func(request_func_input=profile_input)
+        profile_output = await request_func(request_func_input=profile_input, ignore_eos=True)
         if profile_output.success:
             print("Profiler stopped")
 
@@ -515,6 +517,9 @@ async def benchmark(
                                     metrics.output_throughput))
     print("{:<40} {:<10.2f}".format("Total Token throughput (tok/s):",
                                     metrics.total_token_throughput))
+    
+    iteration_data = requests.get(base_url + "/iteration_data").json()
+    print(type(iteration_data))
 
     result = {
         "duration": benchmark_duration,
@@ -530,6 +535,7 @@ async def benchmark(
         "itls": [output.itl for output in outputs],
         "generated_texts": [output.generated_text for output in outputs],
         "errors": [output.error for output in outputs],
+        "log_iterations": iteration_data,
     }
 
     def process_one_metric(
