@@ -319,6 +319,7 @@ class OpenAIServingCompletion(OpenAIServing):
                             CompletionResponseStreamChoice(
                                 index=i,
                                 text=delta_text,
+                                output_tokens=delta_token_ids,
                                 logprobs=logprobs,
                                 finish_reason=finish_reason,
                                 stop_reason=stop_reason,
