@@ -762,6 +762,7 @@ class CompletionResponseStreamChoice(OpenAIBaseModel):
             "to stop, None if the completion finished for some other reason "
             "including encountering the EOS token"),
     )
+    token_ids: list[int] = Field(default_factory=list)
 
 
 class CompletionStreamResponse(OpenAIBaseModel):
