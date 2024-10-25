@@ -37,10 +37,11 @@ class SamplingParams:
 class RequestFuncOutput:
     success: bool = False
     token_ids: list[int] = field(default_factory=list)
-    latency: float = 0.0
+    error: str = ""
+    start_ts: float = 0.0
+    token_ts: list[float] = field(default_factory=list)
     ttft: float = 0.0
     itl: list[float] = field(default_factory=list)
-    error: str = ""
 
 @dataclass
 class BenchmarkMetrics:
@@ -120,38 +121,25 @@ async def async_request_vllm(
             payload["top_p"] = sampling_params.top_p
         
         output = RequestFuncOutput()
-        
-        ttft = 0.0
-        st = time.perf_counter()
-        most_recent_timestamp = st
+        output.start_ts = time.perf_counter()
         try:
             async with session.post(url=api_url, json=payload) as response:
                 if response.status == 200:
                     async for chunk_bytes in response.content:
+                        timestamp = time.perf_counter()
                         chunk_bytes = chunk_bytes.strip()
                         if not chunk_bytes:
                             continue
 
-                        timestamp = time.perf_counter()
                         chunk = chunk_bytes.decode("utf-8").removeprefix("data: ")
-
                         if chunk == "[DONE]":
                             continue
                         data = json.loads(chunk)
 
                         if data["choices"][0]["token_ids"]:
-                            # first token
-                            if ttft == 0.0:
-                                ttft = timestamp - st
-                                output.ttft = ttft
-                            # decoding phase
-                            else:
-                                output.itl.append(timestamp - most_recent_timestamp)
-                            
+                            output.token_ts.append(timestamp)
                             output.token_ids += data["choices"][0]["token_ids"]
-                            most_recent_timestamp = timestamp
-                    
-                    output.latency = most_recent_timestamp - st
+
                     output.success = True
                 
                 else:
@@ -193,34 +181,21 @@ async def async_request_trtllm(
             payload["runtime_top_p"] = sampling_params.top_p
         
         output = RequestFuncOutput()
-        
-        ttft = 0.0
-        st = time.perf_counter()
-        most_recent_timestamp = st
+        output.start_ts = time.perf_counter()
         try:
             async with session.post(url=api_url, json=payload) as response:
                 if response.status == 200:
                     async for chunk_bytes in response.content:
+                        timestamp = time.perf_counter()
                         chunk_bytes = chunk_bytes.strip()
                         if not chunk_bytes:
                             continue
 
-                        timestamp = time.perf_counter()
                         chunk = chunk_bytes.decode("utf-8").removeprefix("data:")
-
-                        # first token
-                        if ttft == 0.0:
-                            ttft = timestamp - st
-                            output.ttft = ttft
-                        # decoding phase
-                        else:
-                            output.itl.append(timestamp - most_recent_timestamp)
-                        
                         data = json.loads(chunk)
+                        output.token_ts.append(timestamp)
                         output.token_ids.append(data['output_ids'])
-                        most_recent_timestamp = timestamp
                     
-                    output.latency = most_recent_timestamp - st
                     output.success = True
                 
                 else:
@@ -279,11 +254,15 @@ def calculate_metrics(
             output_len = len(outputs[i].token_ids)
             total_input_tokens += input_requests[i][1]
             total_output_tokens += output_len
+            latency = outputs[i].token_ts[-1] - outputs[i].start_ts
+            outputs[i].ttft = outputs[i].token_ts[0] - outputs[i].start_ts
             if output_len > 1:
-                tpots.append((outputs[i].latency - outputs[i].ttft) / (output_len - 1))
+                tpots.append((latency - outputs[i].ttft) / (output_len - 1))
+            for j in range(1, len(outputs[i].token_ts)):
+                outputs[i].itl.append(outputs[i].token_ts[j] - outputs[i].token_ts[j-1])
             itls += outputs[i].itl
             ttfts.append(outputs[i].ttft)
-            e2es.append(outputs[i].latency)
+            e2es.append(latency)
             generation_texts.append(tokenizer.decode(outputs[i].token_ids))
             
             successes += 1
@@ -392,6 +371,7 @@ async def benchmark(
         "itls": [output.itl for output in outputs],
         "generated_texts": generation_texts,
         "errors": [output.error for output in outputs],
+        "token_ts": [{"start_ts": output.start_ts, "timestamps": output.token_ts} for output in outputs]
     }
 
     def process_one_metric(
