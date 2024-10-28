@@ -3,6 +3,7 @@ import time
 import json
 import traceback
 import random
+import warnings
 from argparse import ArgumentParser, Namespace
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, Optional
@@ -19,6 +20,7 @@ AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60)
 
 @dataclass
 class RequestFuncInput:
+    request_id: str
     token_ids: list[int]
     input_len: int
     output_len: int
@@ -80,7 +82,7 @@ def sample_random_requests(
     prefix_token_ids = np.random.randint(0, tokenizer.vocab_size, size=prefix_len).tolist()
     input_requests = []
     for i in range(num_requests):
-        input_ids = prefix_token_ids + np.random.randint(0, tokenizer.vocab_size, size=input_len).tolist()
+        input_ids = [tokenizer.bos_token_id] + prefix_token_ids + np.random.randint(0, tokenizer.vocab_size, size=input_len - 1).tolist()
         input_requests.append(
             (input_ids, prefix_len + input_len, output_len)
         )
@@ -162,14 +164,22 @@ async def async_request_trtllm(
     sampling_params: SamplingParams,
     pbar: Optional[tqdm] = None,
 ) -> RequestFuncOutput:
-    assert api_url.endswith("tensorrt_llm/generate_stream")
+    assert api_url.endswith("generate_stream")
 
     async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         payload = {
+            "id": request_func_input.request_id,
             "input_ids": request_func_input.token_ids,
             "input_lengths": request_func_input.input_len,
             "request_output_len": request_func_input.output_len,
             "streaming": True,
+            "end_id": request_func_input.end_id,
+            "pad_id": request_func_input.pad_id,
+            # "decoder_input_ids": [request_func_input.pad_id],
+            # "decoder_input_lengths": 1,
+            # "stop_words_list": [],
+            # "bad_words_list": [],
+            # "embedding_bias": [],
         }
         if request_func_input.ignore_eos:
             payload["min_length"] = request_func_input.output_len
@@ -193,8 +203,9 @@ async def async_request_trtllm(
 
                         chunk = chunk_bytes.decode("utf-8").removeprefix("data:")
                         data = json.loads(chunk)
-                        output.token_ts.append(timestamp)
-                        output.token_ids.append(data['output_ids'])
+                        if data['sequence_length']:
+                            output.token_ts.append(timestamp)
+                            output.token_ids.append(data['output_ids'])
                     
                     output.success = True
                 
@@ -222,8 +233,9 @@ async def get_request(
     request_rate: float,
 ) -> AsyncGenerator[tuple[list[int], int, int], None]:
     input_requests = iter(input_requests)
-    for request in input_requests:
-        yield request
+    for i, request in enumerate(input_requests):
+        request_id = str(i).zfill(8)
+        yield request_id, request
 
         if request_rate == float("inf"):
             continue
@@ -305,16 +317,24 @@ async def benchmark(
     end_id: int,
     pad_id: int,
     sampling_params: SamplingParams,
-    percentiles: list[float]
+    percentiles: list[float],
+    tokenizer: AutoTokenizer,
 ):
+    if end_id is None or end_id < 0:
+        end_id = tokenizer.eos_token_id
+        warnings.warn(f"end_id is not defined. Use default value: {end_id}.")
+    if pad_id is None:
+        pad_id = tokenizer.eos_token_id if tokenizer.pad_token_id is None else tokenizer.pad_token_id
+        warnings.warn(f"pad_id is not defined. Use default value: {pad_id}.")
     request_func = REQUEST_FUNCS[backend]
     pbar = tqdm(total=len(input_requests))
 
     benchmark_start_time = time.perf_counter()
     tasks: list[asyncio.Task] = []
     async for request in get_request(input_requests, request_rate):
-        input_ids, input_len, output_len = request
+        request_id, (input_ids, input_len, output_len) = request
         request_input = RequestFuncInput(
+            request_id=request_id,
             token_ids=input_ids,
             input_len=input_len,
             output_len=output_len,
@@ -452,8 +472,8 @@ def parse_args() -> Namespace:
         default=float("inf"),
         help="Number of requests per second.",
     )
-    benchmark_group.add_argument("--end_id", type=int, default=-1)
-    benchmark_group.add_argument("--pad_id", type=int, default=-1)
+    benchmark_group.add_argument("--end-id", type=int, default=None)
+    benchmark_group.add_argument("--pad-id", type=int, default=None)
     benchmark_group.add_argument("--ignore-eos", action="store_true")
     benchmark_group.add_argument(
         "--metric-percentiles",
@@ -591,6 +611,7 @@ if __name__ == "__main__":
             args.pad_id,
             sampling_params,
             [float(p) for p in args.metric_percentiles.split(",")],
+            tokenizer,
         )
     )
 
