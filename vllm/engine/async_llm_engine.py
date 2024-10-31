@@ -316,6 +316,14 @@ class _AsyncLLMEngine(LLMEngine):
         assert seq_group_metadata_list is not None
         assert scheduler_outputs is not None
 
+        # log iteration data
+        if scheduler_outputs.running_queue_size:
+            self.num_iteration += 1
+            self.batch_sizes.append(
+                ('p', scheduler_outputs.num_prefill_groups) if scheduler_outputs.num_prefill_groups > 0 
+                else ('d', len(seq_group_metadata_list))
+            )
+
         if not scheduler_outputs.is_empty():
             finished_requests_ids = self.scheduler[
                 virtual_engine].get_and_reset_finished_requests_ids()
@@ -1306,3 +1314,9 @@ class AsyncLLMEngine:
             self.engine.model_executor.stop_profile()
         else:
             self.engine.model_executor._run_workers("stop_profile")
+
+    async def get_iteration_data(self) -> tuple[int, list[tuple[str, int]]]:
+        return self.engine.get_iteration_data()
+    
+    async def clear_iteration_data(self) -> None:
+        self.engine.clear_iteration_data()

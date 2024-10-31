@@ -473,6 +473,10 @@ class LLMEngine:
                     get_tokenizer_for_seq,
                 ),
             ))
+        
+        # Iteration information
+        self.num_iteration: int = 0
+        self.batch_sizes: list[tuple[str, int]] = []
 
     def _initialize_kv_caches(self) -> None:
         """Initialize the KV cache in the worker(s).
@@ -1356,6 +1360,14 @@ class LLMEngine:
         assert seq_group_metadata_list is not None
         assert scheduler_outputs is not None
 
+        # log iteration data
+        if scheduler_outputs.running_queue_size:
+            self.num_iteration += 1
+            self.batch_sizes.append(
+                ('p', scheduler_outputs.num_prefill_groups) if scheduler_outputs.num_prefill_groups > 0
+                else ('d', len(seq_group_metadata_list))
+            )
+
         if not scheduler_outputs.is_empty():
             finished_requests_ids = self.scheduler[
                 virtual_engine].get_and_reset_finished_requests_ids()
@@ -1932,3 +1944,10 @@ class LLMEngine:
                 sampling_params.logits_processors.extend(logits_processors)
 
         return sampling_params
+    
+    def get_iteration_data(self) -> tuple[int, list[tuple[str, int]]]:
+        return self.num_iteration, self.batch_sizes
+    
+    def clear_iteration_data(self) -> None:
+        self.num_iteration = 0
+        self.batch_sizes.clear()

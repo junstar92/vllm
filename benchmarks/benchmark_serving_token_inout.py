@@ -310,6 +310,7 @@ def calculate_metrics(
 async def benchmark(
     model_id: str,
     backend: str,
+    base_url: str,
     api_url: str,
     request_rate: float,
     input_requests: list[tuple[list[int], int, int]],
@@ -376,6 +377,14 @@ async def benchmark(
     print("{:<40} {:<10.2f}".format("Output token throughput (tok/s):", metrics.output_token_throughput))
     print("{:<40} {:<10.2f}".format("Total Token throughput (tok/s):", metrics.total_token_throughput))
 
+    if backend == "vllm":
+        try:
+            iteration_data = requests.get(base_url + "/iteration_data").json()
+        except:
+            iteration_data = None
+    else:
+        iteration_data = None
+
     result = {
         "latency": benchmark_duration,
         "num_requests": metrics.num_requests,
@@ -391,7 +400,8 @@ async def benchmark(
         "itls": [output.itl for output in outputs],
         "generated_texts": generation_texts,
         "errors": [output.error for output in outputs],
-        "token_ts": [{"start_ts": output.start_ts, "timestamps": output.token_ts} for output in outputs]
+        "token_ts": [{"start_ts": output.start_ts, "timestamps": output.token_ts} for output in outputs],
+        "log_iterations": iteration_data,
     }
 
     def process_one_metric(
@@ -577,6 +587,7 @@ if __name__ == "__main__":
 
     backend = args.backend
     api_url = f"http://{args.host}:{args.port}{args.endpoint}"
+    base_url = f"http://{args.host}:{args.port}"
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     model_id = get_model_id(f"http://{args.host}:{args.port}/v1/models") if backend == "vllm" else ""
 
@@ -603,6 +614,7 @@ if __name__ == "__main__":
         benchmark(
             model_id,
             backend,
+            base_url,
             api_url,
             args.request_rate,
             input_requests,
