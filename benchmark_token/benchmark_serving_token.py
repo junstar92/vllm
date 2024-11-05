@@ -36,6 +36,11 @@ class SamplingParams:
     top_p: float = None
 
 @dataclass
+class SpeculativeDecodingParams:
+    num_draft_tokens: int = None
+    use_draft_logits: bool = None
+
+@dataclass
 class RequestFuncOutput:
     success: bool = False
     token_ids: list[int] = field(default_factory=list)
@@ -162,6 +167,7 @@ async def async_request_trtllm(
     api_url: str,
     request_func_input: RequestFuncInput,
     sampling_params: SamplingParams,
+    speculative_decoding_params: SpeculativeDecodingParams,
     pbar: Optional[tqdm] = None,
 ) -> RequestFuncOutput:
     assert api_url.endswith("generate_stream")
@@ -189,6 +195,11 @@ async def async_request_trtllm(
             payload["runtime_top_k"] = sampling_params.top_k
         if sampling_params.top_p:
             payload["runtime_top_p"] = sampling_params.top_p
+        if speculative_decoding_params.num_draft_tokens:
+            payload["num_draft_tokens"] = speculative_decoding_params.num_draft_tokens
+            payload["streaming"] = False
+        if speculative_decoding_params.use_draft_logits:
+            payload["use_draft_logits"] = True
         
         output = RequestFuncOutput()
         output.start_ts = time.perf_counter()
@@ -203,9 +214,12 @@ async def async_request_trtllm(
 
                         chunk = chunk_bytes.decode("utf-8").removeprefix("data:")
                         data = json.loads(chunk)
-                        if data['sequence_length']:
+                        if data['sequence_length'] == 1:
                             output.token_ts.append(timestamp)
                             output.token_ids.append(data['output_ids'])
+                        elif data['sequence_length'] > 1:
+                            output.token_ts.extend([timestamp] * data['sequence_length'])
+                            output.token_ids.extend(data['output_ids'])
                     
                     output.success = True
                 
@@ -318,6 +332,7 @@ async def benchmark(
     end_id: int,
     pad_id: int,
     sampling_params: SamplingParams,
+    speculative_decoding_params: SpeculativeDecodingParams,
     percentiles: list[float],
     tokenizer: AutoTokenizer,
 ):
@@ -350,6 +365,7 @@ async def benchmark(
                     api_url,
                     request_input,
                     sampling_params,
+                    speculative_decoding_params,
                     pbar,
                 )
             )
@@ -577,6 +593,10 @@ def parse_args() -> Namespace:
         default=None,
     )
 
+    speculative_decoding_group = parser.add_argument_group("speculative decoding options")
+    speculative_decoding_group.add_argument('--num-draft-tokens', type=int, default=None)
+    speculative_decoding_group.add_argument('--use-draft-logits', action='store_true')
+
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -609,6 +629,10 @@ if __name__ == "__main__":
         args.top_k,
         args.top_p
     )
+    speculative_decoding_params = SpeculativeDecodingParams(
+        args.num_draft_tokens,
+        args.use_draft_logits
+    )
     
     result_json = asyncio.run(
         benchmark(
@@ -622,6 +646,7 @@ if __name__ == "__main__":
             args.end_id,
             args.pad_id,
             sampling_params,
+            speculative_decoding_params,
             [float(p) for p in args.metric_percentiles.split(",")],
             tokenizer,
         )
